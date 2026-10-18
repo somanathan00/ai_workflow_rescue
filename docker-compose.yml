@@ -18,10 +18,20 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    networks: [internal]
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Append-only file on a named volume, so queued tasks survive a restart.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
     ports:
       - "127.0.0.1:${REDIS_HOST_PORT:-6380}:6379"
     healthcheck:
@@ -29,19 +39,29 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    networks: [internal]
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
 
   migrate:
-    build: .
+    build: ./backend
     image: ai-workflow-rescue-starter:latest
     restart: "no"
     environment: &app-environment
       DATABASE_URL: postgresql+psycopg://workflow:workflow@postgres:5432/workflow_db
       REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-development-only-change-me}
     command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres:
         condition: service_healthy
+    networks: [internal]
 
   api:
     image: ai-workflow-rescue-starter:latest
@@ -52,8 +72,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -64,6 +82,12 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
+    networks: [internal, edge]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
 
   worker:
     image: ai-workflow-rescue-starter:latest
@@ -75,13 +99,104 @@ services:
       - app.workers.celery_app:celery_app
       - worker
       - --loglevel=info
-      - --queues=workflow
+      - --queues=workflow,investigations
       - --concurrency=2
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - celery -A app.workers.celery_app:celery_app inspect ping -d celery@$$HOSTNAME -t 5
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    networks: [internal]
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "1.0"
+
+  beat:
+    image: ai-workflow-rescue-starter:latest
+    restart: unless-stopped
+    environment: *app-environment
+    command:
+      - celery
+      - -A
+      - app.workers.celery_app:celery_app
+      - beat
+      - --loglevel=info
+      - --schedule=/tmp/celerybeat-schedule
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks: [internal]
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.25"
+
+  # Publishes committed outbox messages to Celery. Deliberately does not
+  # wait for Redis: it must keep retrying while Redis is down.
+  outbox:
+    image: ai-workflow-rescue-starter:latest
+    restart: unless-stopped
+    environment: *app-environment
+    command: ["python", "-m", "app.workers.outbox_runner"]
+    healthcheck:
+      # The runner touches this file every cycle; stale means stuck.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,time,sys; sys.exit(0 if time.time()-os.path.getmtime('/tmp/outbox_heartbeat')<30 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.25"
+
+  # React single-page app served by nginx, which also proxies /api to the
+  # API container so the browser only ever talks to one origin.
+  frontend:
+    build: ./frontend
+    image: ai-workflow-rescue-frontend:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks: [edge]
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
 
   test:
     image: ai-workflow-rescue-starter:latest
@@ -89,13 +204,21 @@ services:
     restart: "no"
     environment: *app-environment
     volumes:
-      - ./tests:/app/tests:ro
+      - ./backend/tests:/app/tests:ro
     command: ["pytest", "-q", "-p", "no:cacheprovider"]
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks: [internal]
+
+networks:
+  # frontend <-> api only. The web container cannot reach Postgres or Redis.
+  edge:
+  # everything that touches the database or the broker.
+  internal:
 
 volumes:
   postgres_data:
+  redis_data:

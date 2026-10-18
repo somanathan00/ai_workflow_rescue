@@ -443,8 +443,12 @@ function RecoveryPanel({
         </ul>
       )}
 
-      {workflow.status === "completed" ? (
-        <Empty>This workflow completed; nothing to recover.</Empty>
+      {workflow.status === "completed" || workflow.status === "compensated" ? (
+        <Empty>
+          {workflow.status === "completed"
+            ? "This workflow completed; nothing to recover."
+            : "This order was compensated (its stock was released); nothing more to recover."}
+        </Empty>
       ) : active ? (
         <p className="muted small">A recovery is already in progress for this workflow, so a new one can't be requested yet.</p>
       ) : (

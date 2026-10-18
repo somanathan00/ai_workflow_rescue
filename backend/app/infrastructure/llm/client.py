@@ -64,6 +64,15 @@ class GeminiInvestigationClient:
                 retryable = exc.code in RETRYABLE_STATUS
 
                 if not retryable or attempt == MAX_API_ATTEMPTS:
+                    if exc.code == 429:
+                        # Free-tier quota is counted per model, so another
+                        # model may still be available.
+                        raise LLMUnavailable(
+                            f"Gemini quota exhausted for {settings.GEMINI_MODEL}. "
+                            "Wait for the quota to reset, or set GEMINI_MODEL "
+                            "to another model and restart."
+                        ) from exc
+
                     raise LLMUnavailable(
                         f"Gemini API error {exc.code}"
                     ) from exc

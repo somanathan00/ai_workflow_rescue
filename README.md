@@ -43,10 +43,11 @@ make demo DEMO_ARGS=--investigate
 Without a key the app runs normally; investigations are marked `failed` with the reason and
 recovery is unaffected.
 
-**Gemini free tier:** the free tier allows only about 20 requests per model per day. One
-investigation is one request, and `make eval` uses about 8, so you can hit the limit quickly.
-When that happens the investigation shows a 429 error and recovers by itself the next day (or use a
-billed key).
+**Gemini free tier:** quotas are counted per model, and some models allow only about 20 requests
+per day. One investigation is one request and `make eval` uses about 8. When a model runs out, the
+investigation shows a clear "quota exhausted" message; set `GEMINI_MODEL` in `.env` to another model
+and run `make up`, or wait for the reset. The default is `gemini-flash-lite-latest`: in our 10-scenario
+evaluation it was both faster (about 1.6 s) and more accurate than `gemini-2.5-flash` (about 8.9 s).
 
 ### Is the AI any good? (evaluation)
 
@@ -135,6 +136,16 @@ frontend/
 docker-compose.yml  Makefile  .env(.example)
 docs/             architecture, API, scenarios, decisions
 ```
+
+## Submission documents
+
+| Document | What it is |
+|---|---|
+| [`quest/intent.md`](quest/intent.md) | The problem and what I set out to build |
+| [`quest/Final directive.md`](quest/Final%20directive.md) | The rules the system and the AI collaborator must follow |
+| [`quest/demo-walkthrough.md`](quest/demo-walkthrough.md) | The working solution: how to run it, with screenshots |
+| [`quest/writeup.md`](quest/writeup.md) | Short write-up: the problem, what I unlearned, how I used AI, what failed |
+| [`quest/ai_usage_log.md`](quest/ai_usage_log.md) | The 5-day AI usage log |
 
 ## Known limitations
 

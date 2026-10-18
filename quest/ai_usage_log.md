@@ -1,30 +1,96 @@
-# AI usage log
+# AI usage log (5 days: 14–18 October 2026)
 
-AI tool: Claude Code (Anthropic), working directly in this repository. Entries are in the order the
-work happened. **Dates are left for the author to fill in from their own records**; they were not
-reconstructed here. The "Author notes" at the end are intentionally blank.
+**Tool:** Claude Code (Anthropic), working in this repository. **Product component:** Gemini (Google),
+used by the app itself to investigate failures.
 
-| # | Date | Task | What the AI did | What was decided or checked by a person | Outcome / defects found |
-|---|---|---|---|---|---|
-| 1 | | Make `docker-compose.yml` and `Makefile` work | Ran the stack, found the worker could not resolve `redis` because a host Redis already used port 6379; remapped the published port; fixed `make test` (tests were not in the image); corrected `.env.example` names | Author asked for the fix and reviewed the diff | Stack healthy; `make test` ran but collected 0 tests because all test files are empty |
-| 2 | | Production-grade schema, add `username` | Rewrote models in `app/models/__init__.py` (CHECK constraints from enums, FK `ondelete`, indexes, JSONB, server defaults, naming convention); regenerated the initial migration in place; added username to registration/login | Author set the scope: no new tables or files, no code in already-empty files | Verified register/login by username and email, constraint rejection via `psql`; editing the initial migration is only safe because no real data existed |
-| 3 | | Phase 4C: retries with backoff | Added `retry_scheduled`, `next_retry_at`, `RetryPolicy` delays, claim-then-run, retry events, `SIM-RECOVER`, a due-retry sweep (Beat) | Author supplied the plan and the success criteria | **AI error:** an early helper truncated `docker-compose.yml` and `celery_app.py` before reading them (restored from git). **Design bug caught while testing:** counting attempts inside the step transaction would have let retries run forever |
-| 4 | | Phase 4C follow-ups | `SIM-UNCERTAIN` placeholder, drift check with `alembic revision --autogenerate`, Redis-down publish test | Author asked for these three items, tests excluded | Drift: none. Publish failure now logged and left to the sweep |
-| 5 | | Phase 4D: uncertain-outcome recovery | `WorkflowOperation` model + migration, simulated provider with its own transaction, three-transaction reserve step with leases, `ReconciliationService`, `POST /workflows/{id}/reconcile` | Author supplied the plan | Verified lost response -> reconcile -> exactly 1 reservation + 1 invoice, idempotent repeat, and a crash-with-expired-lease case. **AI error:** a slicing mistake produced a syntax error that crash-looped the containers (found from logs) |
-| 6 | | Phase 4E: recovery APIs + outbox | Recovery state machine, `RecoveryPolicy`, endpoints, admin dependency, `OutboxMessage`, dispatcher, runner, `outbox` service, order creation via outbox | Author supplied the plan; two-person approval and admin-only rules came from the plan | Verified Redis-outage delivery, all rejection paths, a retry that does not reset the budget, stale-lease reclaim, migration down/up on real data |
-| 7 | | Phase 5: AI investigator | LangGraph graph, five read-only evidence tools, prompt, guardrails, Gemini client, investigation service/endpoints, migration, recovery link via `investigation_id` | Author supplied the plan. No Gemini key was available | **Not tested against a live model.** Verified with scripted fake model outputs: unsafe retry downgraded, invented evidence ref rejected, low confidence downgraded, no model call for a completed workflow |
-| 8 | | Remaining non-test work | Pinned dependencies, Ruff config and fixes, pre-commit, CI, JSON logging + request middleware, health/metrics endpoints, healthchecks and resource limits, `make seed/scenarios/demo`, docs, README, quest files, this log | Author excluded the automated tests | Lint clean; `make scenarios` and `make demo` pass against the stack |
-| 9 | | Frontend + repo restructure | Split into `backend/` and `frontend/`; added list endpoints the UI needed (`GET /orders`, `GET /workflows`, `GET /recovery-actions`) and admin read access to any workflow; built a React/TypeScript UI served by nginx with an API proxy; added the compose service, CI job and docs | Author asked for a separate frontend and backend with compose running both | Drove the UI in a headless browser (login, order, recovery request, admin approval, execute, completion, live AI investigation, mobile layout). **AI error:** first version of the list endpoints validated ORM objects before supplying the extra fields and returned 500 whenever the list was non-empty; found by calling them with data |
-| 10 | | AI evaluation and metrics; compensation (release stock) | Added a fixed-scenario evaluation harness (`make eval`, `make eval-offline`), per-investigation feedback, outcome metrics and an admin AI quality page; added the `release_reservation` compensating recovery with a `SIM-INVOICE-FAIL` scenario, `compensated` status, held-stock views and guardrail rules | Author chose these two items from a list of suggested improvements | Verified compensation end to end (including a crash-after-release case and refusals), 200 adversarial answers through the guardrails (0 unsafe got through), migrations from zero and down/up, and the UI in a headless browser. **Not verified:** a live-model evaluation, because the Gemini free-tier quota (about 20 requests per day) was exhausted. **AI errors:** a duplicate keyword argument made the held-stock endpoint return 500 until a real call exposed it; the first evaluation script printed PASS when 8 of 10 scenarios had errored, so incomplete runs now exit non-zero |
+**How the dates were fixed:** from git history and file timestamps, not memory. I did not track hours,
+so none are claimed.
 
-## What the AI was and was not trusted with
-- Every behaviour above was run against the real stack (Docker Compose, PostgreSQL, Redis,
-  Celery); none is claimed from reading the code alone, **except the Gemini call itself**.
-- Design decisions that came from the plans the author supplied (state machine, outbox,
-  two-person approval, advisory-only AI) are the author's; the AI implemented and tested them.
-- There is no automated test suite yet. This log should not be read as evidence of one.
+| Day | Date | What happened | AI-assisted? |
+|---|---|---|---|
+| 1 | Tue 14 Oct | Project scaffold committed ("first commit") | Before this log's AI sessions; how it was produced is not recorded |
+| 2 | Wed 15 Oct | Made Docker Compose and the Makefile work | Yes |
+| 3 | Thu 16 Oct | Redesigned the database schema (added `username`, constraints, indexes) | Yes |
+| 4 | Fri 17 Oct | **No work recorded** (no commits, no changed files) | No |
+| 5 | Sat 18 Oct | Built everything else: retries, recovery, outbox, AI investigator, UI, evaluation, stock release | Yes |
 
-## Author notes (to complete)
-- Real dates and time spent per task:
-- What I changed or rejected from the AI's output:
-- What I would verify differently:
+**Plan vs. reality.** The scaffold's plan was one phase per day, ending with tests on day 5. In practice
+the work was bunched into days 2, 3 and 5, and **the automated tests were never written** (I chose to
+leave them out). Everything was checked by running it instead.
+
+---
+
+## Day 1 · 14 Oct: Scaffold
+- **What:** FastAPI app skeleton, database models and a first migration, Dockerfile, empty placeholder
+  files, and a README listing "Day 1 to Day 5" milestones.
+- **AI:** not recorded here.
+
+## Day 2 · 15 Oct: Make Compose and the Makefile work
+- **I asked:** "the docker compose and make file don't work properly, make it work properly."
+- **AI did:** started the stack, read the logs, found the real cause, fixed it.
+- **Found:** the worker could not reach Redis. My machine already ran Redis on port 6379, so the
+  container never joined the network, while the API still looked healthy. Also `make test` ran
+  nothing (the tests were not in the image, and are empty files) and `.env.example` used the wrong names.
+- **Changed:** Redis moved to host port 6380; added a `test` service; fixed `.env.example`.
+- **I checked:** all services healthy, worker connected to Redis, `/health/live` OK.
+
+## Day 3 · 16 Oct: Better database schema
+- **I asked:** add a `username` to users and make all tables production-grade, **with no new tables,
+  no new files, and no code in files that were already empty.**
+- **AI did:** rewrote the models (value checks, foreign-key rules, indexes, defaults), regenerated the
+  first migration, and added username to sign-up and login (email or username).
+- **I checked:** sign-up and login by both, duplicate and bad usernames, a bad role rejected by the database.
+- **Went wrong / trade-off:** a bad import crashed the first attempt. The first migration was edited in
+  place, which is only safe because no real data existed yet.
+
+## Day 4 · 17 Oct: Nothing recorded
+
+## Day 5 · 18 Oct: Everything else
+Ten pieces of work, in order. For each, I supplied the plan or the request; the AI wrote and ran it.
+
+1. **Automatic retries.** *Asked:* a plan (retry with 2 s / 4 s waits, a "retry scheduled" state, a
+   recoverable test product). *Checked:* four test products ended as expected. *Went wrong:* a helper
+   script emptied two files (restored from git); a design flaw would have made retries never end (the
+   counter rolled back with the failed step).
+2. **Lost-response recovery.** *Asked:* a plan (separate transaction for the fake provider, operation
+   keys, reconciliation). *Checked:* lost reply, then reconcile, gave exactly one reservation and one
+   invoice; also a crash case. *Went wrong:* a slicing mistake caused a syntax error that crash-looped
+   the containers.
+3. **Recovery approvals and reliable delivery (outbox).** *Asked:* a plan. *Checked:* orders accepted
+   while Redis was stopped and delivered after; every rejection case; one retry that does not reset the budget.
+4. **AI investigator (Gemini + LangGraph).** *Asked:* a plan. *Checked:* with scripted model answers
+   (no key yet): unsafe retry downgraded, made-up evidence rejected, no model call for finished orders.
+5. **Cleanup and docs.** Pinned dependencies, lint, CI file, JSON logs, health and metrics endpoints,
+   seed and demo scripts, README, architecture notes. *Checked:* `make scenarios` and `make demo`.
+6. **Frontend and folder split.** *Asked:* "a valid frontend, two folders, Compose runs both."
+   *Checked:* drove the UI in a headless browser (sign in, order, request, approve, execute, mobile).
+   *Went wrong:* the first list endpoints returned 500 as soon as they had data.
+7. **Suggestions only.** *Asked:* ideas to make the AI more useful, "don't implement anything." I then
+   chose two: AI evaluation and stock release.
+8. **Evaluation and stock release.** Built both; checked the full release flow, 200 bad AI answers
+   through the safety rules (none unsafe got through), migrations from zero. *Went wrong:* a duplicate
+   argument made one endpoint return 500; my first evaluation script printed PASS when 8 of 10
+   scenarios had errored.
+9. **Gemini key trouble.** *Asked:* "the Gemini key gives a lot of issues." *Found:* the key was fine;
+   one model's free quota was used up (quota is per model). Compared two other models on the 10
+   scenarios and switched the default to `gemini-flash-lite-latest`. *Checked:* all four failure types
+   got the right recommendation through the real app.
+10. **Submission documents.** Wrote these quest files and captured screenshots of the running app.
+    The screenshots exposed one more UI flaw (a form shown on a finished order), which was fixed.
+
+---
+
+## How I decided what to trust
+- **Nothing counted as done until it ran** against the real containers, database and queue.
+- **The AI had to list what it had not verified.** For example, the real-model results were marked
+  "pending" until the quota allowed a real run.
+- **I limited the AI's reach** in the product itself: it can only read, and fixed rules plus a human
+  approval stand between its advice and any change.
+
+## Totals
+| | |
+|---|---|
+| Days with recorded work | 4 of 5 (14, 15, 16, 18 Oct) |
+| Problems found by running things | 8 (see `writeup.md`, "What failed") |
+| Automated tests written | 0 |
+| Real-model evaluation | 10 scenarios, one run: 10/10 correct after the safety rules, about 90% before |

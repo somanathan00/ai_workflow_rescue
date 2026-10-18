@@ -1,57 +1,75 @@
 # Write-up: AI Workflow Rescue
 
-## Summary
-AI Workflow Rescue is an order-processing backend (FastAPI, PostgreSQL, Redis, Celery) built
-around one idea: **recover automatically only when it is provably safe, and make everything else
-easy for a human to resolve**. An AI investigator (Gemini via LangGraph) explains failures and
-recommends a recovery, but it never authorizes or executes one.
+**In one sentence:** an order system that retries only when that is safe, stops and checks when it
+cannot tell whether work was done, and uses an AI to explain failures, with a person approving
+every fix.
 
-## The problem that shaped the design
-Inventory is reserved, then the response is lost. The worker cannot tell whether the reservation
-exists. Retrying may reserve twice; giving up strands the order.
+## 1. The problem
+An order has three steps: validate it, reserve inventory, create an invoice. Step 2 talks to another
+system. Sometimes that system **does the work but the reply is lost**. The order system cannot tell
+whether stock was reserved. Retrying might reserve twice. Giving up leaves the order stuck. Asking a
+person means digging through logs.
 
-## What I built
+A second, quieter problem: if the order then fails *after* stock was reserved, the stock stays held
+for an order that will never finish.
 
-**Safe retries.** Transient failures retry up to three executions with 2s/4s backoff. State lives
-in PostgreSQL (`retry_scheduled`, `next_retry_at`), not in Celery, and a periodic sweep
-re-enqueues anything overdue. `SIM-RECOVER` derives its failures from the persisted attempt
-count, so behaviour is identical across workers.
+## 2. What I built
+- **Safe retries.** Temporary failures retry up to 3 times (waiting 2 s, then 4 s). The retry state
+  is saved in the database, so it survives a restart.
+- **Stop and check.** When a result is unknown, the system stops, then verifies the reservation
+  against the original order before continuing. It never assumes.
+- **Approved recovery.** A person requests a fix, a *different* admin approves it, then it runs once.
+  Every step is recorded.
+- **Reliable delivery.** An order is saved together with its "process me" message, so a Redis
+  outage cannot lose it.
+- **AI investigator (Gemini).** One click gives the root cause, the evidence it used, and a
+  recommended action. It can only read; fixed rules check its answer afterwards.
+- **Releasing stuck stock.** An approved "release stock" fix gives the inventory back.
+- **Measuring the AI.** A fixed set of 10 scenarios, thumbs up/down, and a page showing how often
+  its advice was followed and actually worked.
+- **A web UI** (React) and a simulated inventory system with five on-purpose failure types.
 
-**Uncertain-outcome recovery.** Side effects are tracked as operations with stable keys and
-leases. The provider call runs outside any workflow transaction, which is the only way to
-simulate "committed but response lost" faithfully. On a lost response the operation becomes
-`uncertain` and the workflow stops. Reconciliation verifies the reservation against the original
-order and resumes at invoicing; absence of a record is never treated as proof of failure.
+Screenshots and run instructions: `demo-walkthrough.md`.
 
-**Controlled recovery.** A state machine (`requested -> approved -> queued -> executing ->
-executed|failed`) with admin-only approval, no self-approval, one active recovery per workflow
-(enforced by a partial unique index) and policy re-checked at every step against live state.
+## 3. What I unlearned
+These are beliefs the project disproved, each from something that really happened:
 
-**Reliable delivery.** A transactional outbox replaces "commit, then publish". Orders are
-accepted while Redis is down and delivered when it returns. Delivery is at-least-once and every
-consumer is idempotent.
+| I assumed | What turned out to be true |
+|---|---|
+| "If it timed out, retry." | A timeout can mean the work **succeeded**. Retrying can duplicate it. |
+| "Raise an error inside the transaction to simulate a lost reply." | The transaction rolls back, which simulates a *failed* call, not a lost reply. The fake provider needed its **own transaction** that commits first. |
+| "Count an attempt when it fails." | If the step fails, its transaction rolls the counter back and retries never end. **Claim the attempt first**, in its own committed step. |
+| "The API is healthy, so the system is healthy." | The API was fine while the worker could not reach Redis (a port clash with Redis already on my machine). |
+| "A confident AI answer is a good answer." | Confidence is what the model says about itself. I measure advice by what people did with it and whether it worked. |
+| "One rule 'never retry if a reservation exists' is safe." | Too broad: retrying the **invoice** step with stock already reserved is perfectly safe. The rule had to depend on the step. |
+| "My free API key just works." | Free quota is counted **per model**. One model ran out while others were fine; switching model fixed it. |
 
-**AI investigator.** A LangGraph pipeline collects evidence through read-only tools, asks Gemini
-for a schema-validated analysis, then applies guardrails that can only downgrade the result.
-Cited evidence must exist, confidence must clear a threshold, and a retry is refused where a side
-effect already happened. The model's original answer and the guardrail verdict are both stored.
+## 4. How I used AI
+- **Claude Code** (an AI coding assistant) worked inside the repository. I supplied the plans and
+  the limits ("schema only", "leave the tests alone"); it wrote most of the code, ran it, and fixed it.
+- **Gemini** is part of the product: it investigates failures. It is a helper, not a dependency.
+- **I did not trust code I had not seen run.** Each feature was exercised against the real running
+  system and its output checked. The AI also had to say what it had **not** verified.
+- **I kept the AI's power small on purpose**: read-only tools, a fixed safety layer, and human approval.
+- The day-by-day log is in `ai_usage_log.md`.
 
-## Bugs found by running it, not by reading it
-- The worker could not reach Redis because the host already ran Redis on 6379; the container
-  silently never joined the network while the API still looked healthy.
-- The first retry design incremented attempts inside the step's transaction, so a failing step
-  rolled the counter back and retries would never end. Claiming an execution now commits first.
-- Events written in one transaction shared a `created_at`, making the audit order ambiguous;
-  events now use `clock_timestamp()`.
-- A tight loop was possible when another worker held an operation lease; the reserve step now
-  reports whether to continue.
+## 5. What failed
+Real mistakes, caught by running things:
 
-## What I would do next
-Write the automated test suite (the behaviours above were verified by running scenarios against
-the stack, not by tests), exercise the investigator against a live model with a fixture dataset
-of known failures, add rate limiting, and replace the simulated provider with a real integration
-that uses the operation key as an idempotency key.
+- **The worker could not reach Redis** (a port clash). Found only by looking at logs, not at health checks.
+- **A helper script emptied two files** (`docker-compose.yml`, `celery_app.py`) before reading them. Restored from git.
+- **A retry design flaw**: the attempt counter rolled back with the failed step (see section 3).
+- **A slicing mistake** produced a syntax error that crash-looped the containers.
+- **Two list endpoints returned HTTP 500** as soon as they had data, because of a coding slip. Found by
+  calling them with real rows, not empty ones.
+- **My first evaluation script printed PASS when 8 of 10 scenarios had errored.** It now fails when it
+  cannot evaluate everything.
+- **The AI service itself failed**: a 504 timeout, then free-tier quota exhaustion on one model.
+- **A screen showed a form that should have been hidden** on a finished order. Seen in a screenshot.
 
-## Limitations
-See the README. Notably: no automated tests yet, the Gemini call is untested live, the provider
-is simulated, and `/metrics` is unauthenticated.
+## What is not finished
+- **No automated test suite.** Everything was verified by running it by hand and with scripts.
+- **The AI evaluation is small**: one run of 10 scenarios (10/10 correct after the safety rules,
+  about 90% before). Results vary between runs.
+- **The inventory system is simulated.** A real one would need real idempotency keys.
+- **No login rate limiting**, and customer data is not yet redacted before it goes to the model.

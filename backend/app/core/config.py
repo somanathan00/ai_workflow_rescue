@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # Optional so the app boots without a key; investigations then fail
     # with a clear error instead of the whole service refusing to start.
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-flash-latest"
+    GEMINI_MODEL: str = "gemini-flash-lite-latest"
     GEMINI_TIMEOUT_SECONDS: int = 30
 
     @model_validator(mode="after")

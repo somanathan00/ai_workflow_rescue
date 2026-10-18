@@ -55,7 +55,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       ENVIRONMENT: ${ENVIRONMENT:-development}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-lite-latest}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-development-only-change-me}
     command: ["alembic", "upgrade", "head"]
     depends_on:

@@ -1,37 +1,51 @@
 # Intent
 
-## Problem
-Order workflows that touch external systems fail in ways that are hard to recover from safely.
-The dangerous case is not an outage, it is ambiguity: an operation succeeds but the caller never
-hears back. Retrying blindly duplicates side effects; giving up leaves work stuck; and a person
-paged at night has to reconstruct what happened from scattered logs.
+## The problem I picked
+Online orders often involve a second system (here: inventory). Sometimes that system does the work
+but the reply never arrives. The order system then has to guess:
 
-## What this project is for
-A backend that:
+- **Retry?** It might reserve the stock twice (or charge twice).
+- **Give up?** The order is stuck and nobody knows.
+- **Stop and ask a person?** Now someone has to work out what happened from scattered logs.
 
-1. Preserves a complete history of every workflow.
-2. Retries automatically only when the failure is known to be safe to repeat.
-3. Stops when the outcome is uncertain, and verifies reality before continuing.
-4. Gathers evidence from the database and uses an LLM to explain the likely cause and recommend a
-   next step.
-5. Treats that recommendation as advice: deterministic policy and a human approval decide
-   whether anything runs.
-6. Resumes without creating duplicate reservations or invoices, and records every decision.
+Real failures are not only "it crashed". The dangerous one is **"I don't know if it worked."**
 
-## What it deliberately is not
-- Not an autonomous agent. The AI has no tool that changes state and no path to execute recovery.
-- Not a distributed system of many services. One database and one codebase keep the consistency
-  guarantees simple to state and demonstrate.
-- Not a real inventory or billing system. The external provider is simulated so ambiguous
-  failures can be reproduced on demand.
+## What I set out to build
+A small order system that handles failure carefully, in this order:
 
-## Success criteria
-- `SIM-RECOVER` finishes after two recorded failures; `SIM-TRANSIENT` exhausts its budget;
-  `SIM-PERMANENT` fails without retrying.
-- After a lost response, reconciliation finds the original reservation and the workflow
-  completes with exactly one reservation and one invoice.
-- An order is accepted and eventually processed even if Redis is down when it is created.
-- A recovery can be requested, approved by someone else, durably queued, executed once, and
-  audited.
-- An unsafe model recommendation is downgraded before anyone can act on it, and the system
-  recovers fine with no model at all.
+1. **Keep a record** of everything that happens to an order.
+2. **Retry on its own, but only when that is provably safe** (a temporary problem, nothing changed yet).
+3. **Stop when the result is unknown**, then check what really happened before going on.
+4. **Use an AI to explain the failure** and recommend the safest next step.
+5. **Let a person approve** anything that changes an order. The AI only advises.
+6. **Undo work for orders that can never finish**, so stock is not held for nothing.
+7. **Measure the AI**, so we know if it actually helps.
+
+## Who it is for
+- **Operators**, who place and watch orders and ask for fixes.
+- **Admins**, who approve fixes and check how good the AI is.
+
+## What it is deliberately not
+- **Not a fully automatic fixer.** Every fix needs a person's approval.
+- **Not a real inventory or billing system.** The outside system is simulated, so failures can be
+  reproduced on demand (a product ID decides what goes wrong).
+- **Not a large distributed system.** One codebase and one database keep the safety guarantees easy
+  to explain and to prove.
+
+## How I will know it worked (success criteria)
+| Situation | Expected result |
+|---|---|
+| Normal order | Completes |
+| Fails twice for a temporary reason | Fixes itself, completes on the 3rd try |
+| Keeps failing | Stops after 3 tries and is never retried forever |
+| Request can never work | Fails at once, no pointless retries |
+| Work done but reply lost | Stops, then after approval the order completes with **exactly one** reservation and one invoice |
+| Fails after stock was reserved | Stock can be released and the order closed cleanly |
+| Redis is down when an order arrives | The order is still accepted and processed later |
+| AI suggests something unsafe | The unsafe suggestion is changed to a safe one before anyone sees it |
+| AI is unavailable | Everything still works, just without the AI explanation |
+
+## Constraints I set
+- Safety rules are written in ordinary code, not left to the AI.
+- Every claim is checked by running it, not by reading the code.
+- Be honest about what is not finished (see `writeup.md`).

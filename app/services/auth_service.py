@@ -1,6 +1,8 @@
 
+from datetime import datetime, timezone
+
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,16 +22,22 @@ class AuthService:
         email = str(data.email).lower()
 
         existing = db.scalar(
-            select(User).where(User.email == email)
+            select(User).where(
+                or_(
+                    User.email == email,
+                    User.username == data.username,
+                )
+            )
         )
 
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Email already registered",
+                detail="Email or username already registered",
             )
 
         user = User(
+            username=data.username,
             email=email,
             password_hash=hash_password(data.password),
             role="operator",
@@ -44,7 +52,7 @@ class AuthService:
             db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Email already registered",
+                detail="Email or username already registered",
             )
 
         db.refresh(user)
@@ -53,12 +61,16 @@ class AuthService:
     @staticmethod
     def login(
         db: Session,
-        email: str,
+        identifier: str,
         password: str,
     ) -> str:
+        identifier = identifier.strip().lower()
         user = db.scalar(
             select(User).where(
-                User.email == email.lower()
+                or_(
+                    User.email == identifier,
+                    User.username == identifier,
+                )
             )
         )
 
@@ -75,5 +87,8 @@ class AuthService:
                 detail="Invalid credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+        user.last_login_at = datetime.now(timezone.utc)
+        db.commit()
 
         return create_access_token(user.id)

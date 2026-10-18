@@ -14,7 +14,7 @@ make up
 
 Run `make` to list the available commands. Common commands include `make status`, `make logs`, `make migrate`, and `make test`. `make down-volumes` also deletes the Postgres data volume.
 
-For local Python development, create and activate a virtual environment, install `requirements.txt`, and run `uvicorn app.main:app --reload`. The Compose-managed services publish Postgres at `127.0.0.1:5433` and Redis at `127.0.0.1:6379`.
+For local Python development, create and activate a virtual environment, install `requirements.txt`, and run `uvicorn app.main:app --reload`. The Compose-managed services publish Postgres at `127.0.0.1:5433` and Redis at `127.0.0.1:6380` (override with `REDIS_HOST_PORT`).
 
 ## Next milestones
 

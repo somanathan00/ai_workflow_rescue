@@ -15,7 +15,7 @@ help:
 	@echo "  make logs-api      Follow API logs"
 	@echo "  make logs-worker   Follow Celery worker logs"
 	@echo "  make migrate       Run database migrations"
-	@echo "  make test          Run the test suite in the app image"
+	@echo "  make test          Run the test suite (mounts ./tests into the app image)"
 	@echo "  make shell         Open a shell in the running API container"
 	@echo "  make down-volumes  Remove containers and database data"
 
@@ -47,10 +47,10 @@ migrate:
 	$(COMPOSE) run --rm migrate
 
 test:
-	$(COMPOSE) run --rm --no-deps api pytest -q
+	$(COMPOSE) --profile test run --rm test
 
 shell:
 	$(COMPOSE) exec api sh
 
 down-volumes:
-	$(COMPOSE) down --volumes
+	$(COMPOSE) down --volumes --remove-orphans

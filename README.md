@@ -1,161 +1,107 @@
 # AI Workflow Rescue
 
-An order-processing backend that recovers from failures it can prove are safe to recover from,
-and hands everything else to a human with an AI-assisted investigation.
+AI Workflow Rescue is an AI-powered application that helps detect, investigate, and recover from failures in automated workflows.
 
+The application demonstrates a simple order-processing system:
+
+**Validate Order → Reserve Inventory → Generate Invoice**
+
+If a workflow fails, the system automatically retries temporary errors. For complex failures, an AI agent investigates the issue and suggests a recovery action.
+
+Manual recovery requires admin approval to prevent unsafe operations.
+
+## Tech Stack
+
+- **Backend:** Python, FastAPI
+- **Frontend:** React, TypeScript
+- **Database:** PostgreSQL
+- **Background Tasks:** Redis, Celery
+- **AI:** Gemini, LangGraph
+- **Deployment:** Docker, Docker Compose
+
+## Key Features
+
+- Automated workflow processing and retries
+- AI-powered failure investigation
+- Safe recovery without duplicate operations
+- Admin approval for manual recovery
+- Workflow monitoring and execution history
+- Inventory release when an order cannot be completed
+
+## How to Run the Application
+
+### Prerequisites
+
+Install the following:
+
+- Docker with Docker Compose
+- GNU Make
+
+### Step 1: Start the application
+
+Open a terminal in the project folder and run:
+
+```bash
+make up
 ```
-Validate order -> Reserve inventory -> Generate invoice
+
+This starts all the required services.
+
+### Step 2: Create demo users
+
+```bash
+make seed
 ```
 
-The interesting case: inventory is reserved, but the response is lost. A naive retry would
-reserve twice. Here the workflow stops, the reservation is verified against the original order,
-and the workflow resumes without creating a duplicate reservation or invoice.
+This creates the operator and admin accounts. Their login credentials will be displayed in the terminal.
 
-**Stack:** FastAPI, PostgreSQL, Redis, Celery, SQLAlchemy, Alembic, LangGraph, Gemini (backend); React, TypeScript, Vite, nginx (frontend).
+### Step 3: Open the application
 
-## Quick start
+Open your browser and visit:
 
-Requires Docker with Compose, and GNU Make.
+**http://127.0.0.1:3000**
 
-```sh
-make up        # build and start everything: UI, API, worker, beat, outbox dispatcher, Postgres, Redis
-make seed      # create an admin and a dev operator (dev credentials are printed)
-make scenarios # run every failure scenario through the API
-make demo      # uncertain-outcome recovery, end to end
+Log in using the credentials generated in Step 2.
+
+### Step 4: Enable AI Investigation (Optional)
+
+Add your Gemini API key to the `.env` file:
+
+```env
+GEMINI_API_KEY=your_api_key
 ```
 
-Then open **http://127.0.0.1:3000** and sign in as `operator` (or `admin`) with the credentials `make seed` prints.
-API docs: http://127.0.0.1:3000/docs (or http://127.0.0.1:8001/docs). `make` lists all commands. `make down-volumes` also
-deletes the database.
+Restart the application:
 
-For real use, set `JWT_SECRET_KEY`, `ENVIRONMENT=production` and `ADMIN_PASSWORD` (see
-`.env.example`). Production refuses a weak secret. Failure injection only runs in
-`development`/`test`.
+```bash
+make up
+```
 
-### AI investigation
+Run the demo with AI investigation:
 
-Set `GEMINI_API_KEY` (and optionally `GEMINI_MODEL`) in your environment before `make up`, then:
-
-```sh
+```bash
 make demo DEMO_ARGS=--investigate
 ```
 
-Without a key the app runs normally; investigations are marked `failed` with the reason and
-recovery is unaffected.
+The application also works without a Gemini API key, but AI investigations will not be available.
 
-**Gemini free tier:** quotas are counted per model, and some models allow only about 20 requests
-per day. One investigation is one request and `make eval` uses about 8. When a model runs out, the
-investigation shows a clear "quota exhausted" message; set `GEMINI_MODEL` in `.env` to another model
-and run `make up`, or wait for the reset. The default is `gemini-flash-lite-latest`: in our 10-scenario
-evaluation it was both faster (about 1.6 s) and more accurate than `gemini-2.5-flash` (about 8.9 s).
+## Demo Scenarios
 
-### Is the AI any good? (evaluation)
-
-```sh
-make eval-offline   # no key needed: throws every kind of bad answer at the guardrails
-make eval           # asks the real model about 10 fixed scenarios (uses ~8 API requests)
-```
-
-Both report accuracy, how often the model suggested something unsafe, and whether anything unsafe
-got past the guardrails (that must be 0). `make eval` exits non-zero if it could not evaluate every
-scenario, so an incomplete run never looks like a pass. In the UI, the **AI quality** page (admin)
-measures what people actually did with the advice, and every investigation has 👍/👎 buttons.
-
-## The web UI
-
-| Page | Who | What it does |
-|---|---|---|
-| Dashboard | everyone | Counts by status, what needs attention, pending approvals (admin) |
-| Orders | everyone | Place orders (one-click failure scenarios), see each order's workflow |
-| Workflows / detail | everyone | Live step progress, retry countdown, audit trail, **Investigate with AI**, request/approve/execute recoveries |
-| Approvals | admin | Inbox of recovery requests across all workflows |
-| AI quality | admin | Whether the AI is useful: advice acted on, recoveries that worked, helpfulness ratings, guardrail activity, confidence vs. outcome |
-| System | everyone | Dependency health, outbox backlog, stock held by failed orders, activity counts, AI token usage |
-
-Operators see their own orders and workflows; admins see everything and are the only ones who can
-approve or reject a recovery (never their own request). The UI mirrors the backend recovery policy
-to explain why an action is unavailable, but the backend re-validates every request.
-
-## How it stays correct
-
-| Concern | Mechanism |
+| Scenario | Description |
 |---|---|
-| Lost task delivery | Transactional outbox; the order commits together with its message |
-| Transient failures | Bounded retries (3 executions, 2s/4s backoff) persisted in PostgreSQL, with a sweep as the safety net |
-| Ambiguous side effects | Stable operation keys, leases, an idempotent provider, reconciliation before any resume |
-| Duplicate delivery | Row locks, leases, terminal-state checks, unique constraints per order |
-| Unsafe recovery | Deterministic policy re-checked at every step; admin approval; one active recovery per workflow |
-| Unsafe AI advice | Read-only evidence tools, schema validation, guardrails that only downgrade, advisory only |
-| Stock held for orders that can't finish | Compensation: an approved `release_reservation` returns the stock and closes the order as `compensated` |
-| Knowing if the AI helps | Fixed-scenario evaluation, per-investigation feedback, outcome metrics |
+| Normal Order | Order completes successfully |
+| Temporary Failure | Automatically retries and completes |
+| Repeated Failure | Stops after the retry limit |
+| Permanent Failure | Stops without retrying |
+| Uncertain Outcome | Verifies an existing reservation before resuming |
+| Invoice Failure | Releases reserved inventory through approved recovery |
 
-Details: [`docs/architecture.md`](docs/architecture.md), [`docs/api.md`](docs/api.md),
-[`docs/failure_scenarios.md`](docs/failure_scenarios.md), [`docs/decisions/`](docs/decisions/).
+## How AI Is Used
 
-## Failure scenarios
+Gemini and LangGraph investigate failed workflows and recommend possible recovery actions.
 
-| `product_id` | Result |
-|---|---|
-| `LAPTOP-001` | `completed` |
-| `SIM-RECOVER` | fails twice, `completed` on attempt 3 |
-| `SIM-TRANSIENT` | `failed` after the retry budget |
-| `SIM-PERMANENT` | `failed`, no retry |
-| `SIM-UNCERTAIN` | reservation committed, `needs_review`, recoverable via reconciliation |
-| `SIM-INVOICE-FAIL` | invoice fails after stock was reserved, `failed`; the stock is released by a compensation |
+**AI does not directly execute recovery operations.** Backend safety checks and human approval control manual recovery.
 
-## Operations
+## Project Goal
 
-- `GET /health/live`, `GET /health/ready`, `GET /metrics` (Prometheus text, internal use).
-- JSON logs on every service, tagged with `workflow_id`: `make logs`, `make logs-outbox`.
-- `make lint` runs Ruff; CI (`.github/workflows/ci.yml`) lints, applies migrations, checks that
-  models match migrations, runs the tests and builds the image.
-- Host ports bind to `127.0.0.1`: UI 3000, API 8001, Postgres 5433, Redis 6380
-  (`FRONTEND_PORT`, `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT` override).
-- The UI container (non-root nginx) serves the app and proxies `/api`, `/health`, `/metrics` and
-  `/docs` to the API, so the browser uses a single origin and no CORS is needed.
-- Frontend development with hot reload: `cd frontend && npm install && npm run dev`
-  (proxies to the API on port 8001).
-
-## Layout
-
-```
-backend/
-  app/
-    api/          routers and auth dependencies
-    services/     business logic (workflow, recovery, reconciliation, investigation, orders)
-    domain/       enums, error types, retry and recovery policies
-    models/       SQLAlchemy models (app/models/__init__.py)
-    agents/       LangGraph investigator, evidence tools, prompt, guardrails
-    infrastructure/  database session, Gemini client, outbox publisher/dispatcher
-    workers/      Celery app and tasks, outbox runner
-  alembic/        migrations       scripts/   seed and scenario/demo drivers
-  Dockerfile  requirements.txt  pyproject.toml
-frontend/
-  src/            React app (pages, components, API client)
-  Dockerfile  nginx.conf
-docker-compose.yml  Makefile  .env(.example)
-docs/             architecture, API, scenarios, decisions
-```
-
-## Submission documents
-
-| Document | What it is |
-|---|---|
-| [`quest/intent.md`](quest/intent.md) | The problem and what I set out to build |
-| [`quest/Final directive.md`](quest/Final%20directive.md) | The rules the system and the AI collaborator must follow |
-| [`quest/demo-walkthrough.md`](quest/demo-walkthrough.md) | The working solution: how to run it, with screenshots |
-| [`quest/writeup.md`](quest/writeup.md) | Short write-up: the problem, what I unlearned, how I used AI, what failed |
-| [`quest/ai_usage_log.md`](quest/ai_usage_log.md) | The 5-day AI usage log |
-
-## Known limitations
-
-- The automated test suite has not been written yet; behaviour was verified by running the
-  scenarios and demo against the stack, and the UI by driving it in a headless browser.
-- The inventory provider is simulated; a real integration would pass the operation key as the
-  provider's idempotency key and reconcile through its API.
-- Gemini integration is verified up to the API call; it has not been exercised against a live key.
-- Login has no rate limiting, and `/metrics` is unauthenticated (it is also reachable through the UI's nginx).
-- The UI stores its access token in `localStorage`; a hardened deployment would use an httpOnly cookie.
-- Several scaffold files from the initial layout (`app/models/*.py` per-table files,
-  `app/repositories/*`, `app/domain/entities/*`, `app/infrastructure/cache/redis_client.py`)
-  are intentionally empty; models live in `app/models/__init__.py`.
+The goal of AI Workflow Rescue is to make automated workflows more reliable by combining AI-assisted investigation with safe, controlled recovery.
